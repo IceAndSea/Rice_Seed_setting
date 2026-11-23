@@ -1,0 +1,7 @@
+path:  /public/home/cszx_mayan/lmz/lmz/DL/datasets/20250817_1024/20250817_1024_yolofuse
+train: images/train        # RGB 训练图
+val:   images/val         # RGB 验证图
+test:                      # (可选) RGB 测试图
+names:
+  0: no
+  1: yes

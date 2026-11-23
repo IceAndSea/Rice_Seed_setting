@@ -1,0 +1,86 @@
+# Ultralytics YOLO 🚀, AGPL-3.0 license
+# DEYOLO architecture upgraded with YOLOv12-Turbo blocks (C3k2, A2C2f)
+# FIXED: Backbone P3 channels reduced to match Head expectations
+
+# Parameters
+nc: 2 # number of classes
+ch: 6 # Input channels (3 RGB + 3 IR)
+
+# scales: # model compound scaling constants
+#   n: [0.50, 0.25, 1024] 
+#   s: [0.50, 0.50, 1024] 
+#   m: [0.50, 1.00, 512] 
+#   l: [1.00, 1.00, 512] 
+#   x: [1.00, 1.50, 512] 
+depth_multiple: 1.00
+width_multiple: 1.00
+max_channels: 512
+# ==========================================
+# DEYOLO Backbone (Dual Stream: RGB + IR)
+# ==========================================
+backbone:
+  # --- Input Split ---
+  - [-1, 1, IdentityInput, []]          # 0
+  - [-1, 1, ModalitySelector, [1]]      # 1
+  - [-2, 1, ModalitySelector, [2]]      # 2
+
+  # --- RGB Stream ---
+  - [1, 1, Conv,  [64, 3, 2]]               # 3-P1/2
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]]       # 4-P2/4
+  - [-1, 2, C3k2,  [256, False, 0.25]]      # 5
+  - [-1, 1, Conv,  [256, 3, 2, 1, 4]]       # 6-P3/8
+  # 🔴 修改点1：将 512 改为 256，匹配标准 P3 输出
+  - [-1, 2, C3k2,  [256, False, 0.25]]      # 7 (Output P3 for Fusion: 256ch)
+  
+  - [-1, 1, Conv,  [512, 3, 2]]             # 8-P4/16
+  - [-1, 4, A2C2f, [512, True, 4]]          # 9 (Output P4 for Fusion: 512ch)
+  - [-1, 1, Conv,  [1024, 3, 2]]            # 10-P5/32
+  - [-1, 4, A2C2f, [1024, True, 1]]         # 11 (Output P5 for Fusion: 1024ch)
+
+  # --- IR Stream ---
+  - [2, 1, Conv,  [64, 3, 2]]               # 12-P1/2
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]]       # 13-P2/4
+  - [-1, 2, C3k2,  [256, False, 0.25]]      # 14
+  - [-1, 1, Conv,  [256, 3, 2, 1, 4]]       # 15-P3/8
+  # 🔴 修改点2：将 512 改为 256，匹配标准 P3 输出
+  - [-1, 2, C3k2,  [256, False, 0.25]]      # 16 (Output P3: 256ch)
+  
+  - [-1, 1, Conv,  [512, 3, 2]]             # 17-P4/16
+  - [-1, 4, A2C2f, [512, True, 4]]          # 18 (Output P4: 512ch)
+  - [-1, 1, Conv,  [1024, 3, 2]]            # 19-P5/32
+  - [-1, 4, A2C2f, [1024, True, 1]]         # 20 (Output P5: 1024ch)
+
+# ==========================================
+# DEYOLO Head (Fusion & Detection)
+# ==========================================
+head:
+  # --- Fusion Modules (DEA) ---
+  # RGB indices: P3=7,  P4=9,  P5=11
+  # IR  indices: P3=16, P4=18, P5=20
+  
+  - [[7, 16], 1, DEA, [256, 80]]        # 21: Fuse P3 (In: 256+256 -> Out: 256)
+  - [[9, 18], 1, DEA, [512, 40]]        # 22: Fuse P4 (In: 512+512 -> Out: 512)
+  - [[11, 20], 1, DEA, [1024, 20]]      # 23: Fuse P5 (In: 1024+1024 -> Out: 1024)
+
+  # --- Neck ---
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 24
+  - [[-1, 22], 1, Concat, [1]]                 # 25: cat Fused P4
+  - [-1, 2, A2C2f, [512, False, -1]]           # 26: Neck P4
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 27
+  - [[-1, 21], 1, Concat, [1]]                 # 28: cat Fused P3
+  # 此时 Concat 输入: Upsample P4 (512->缩放后128) + DEA P3 (256->缩放后64) = 192
+  # 下一层初始化将期望 192，且实际输入也是 192。完美匹配。
+  - [-1, 2, A2C2f, [256, False, -1]]           # 29: Neck P3
+
+  # Down-sample Path
+  - [-1, 1, GSConv, [256, 3, 2]]                 # 30
+  - [[-1, 26], 1, Concat, [1]]                 # 31: cat Neck P4
+  - [-1, 2, A2C2f, [512, False, -1]]           # 32
+
+  - [-1, 1, GSConv, [512, 3, 2]]                 # 33
+  - [[-1, 23], 1, Concat, [1]]                 # 34: cat Fused P5
+  - [-1, 2, C3k2, [1024, True]]                # 35
+
+  # --- OBB Detect ---
+  - [[29, 32, 35], 1, OBB, [nc, 1]]            # 36
