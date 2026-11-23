@@ -4,7 +4,7 @@ Code for the paper **"BiSSR-Net: A bimodal oriented object detection framework f
 
 ## Overview
 
-BiSSR-Net detects filled and unfilled rice grains with oriented bounding boxes (OBBs) from paired reflective and transmissive images. The repository also contains MMSSR-Net, which handles paired, reflective-only and transmissive-only inputs with one checkpoint.
+BiSSR-Net detects filled and unfilled rice grains with oriented bounding boxes (OBBs) from paired reflective and transmissive images. The repository also contains MMSSR-Net, which handles paired, reflectiv-only, or transmissive-only inputs.
 
 - **ModalitySelector**: splits the six-channel input into two three-channel streams
 - **Dual-stream backbone**: two independently parameterized YOLOv12n backbones with A2C2f modules
@@ -46,7 +46,7 @@ MMSSR-Net. Set `MODEL_CFG` as above and `SCHEDULE = "full_warmup_120"` in `train
 python train_mmssr.py
 ```
 
-`train_bissr.py` uses the settings of the paper: 1024 x 1024 inputs, batch size 32, SGD, FP32 and up to 300 epochs (patience 40). In `train_mmssr.py`, `IMG_SZ = 640` and `BATCH = 16` are example defaults; change them to the values required for your run.
+`train_bissr.py` uses the settings of the paper: 1024 x 1024 inputs, batch size 32, SGD, FP32 and up to 300 epochs (patience 40). In `train_mmssr.py`, `IMG_SZ = 640` and `BATCH = 16` are example defaults.
 
 ## Full-image inference
 
@@ -57,7 +57,7 @@ python val_bissr.py --weights path/to/best.pt --img_dir path/to/images --conf 0.
 python val_mmssr.py --weights path/to/best.pt --img_dir path/to/images --mode dual   # or trans / reflect
 ```
 
-Inference uses 1024 x 1024 slices with 300-pixel overlap, the Edge Confidence Penalty (score x 0.6 within 32 pixels of an internal slice edge), IoF containment filtering (IoF > 0.85 and area ratio < 0.60) and global rotated NMS (IoU 0.5).
+Inference uses 1024 x 1024 slices with 300-pixel overlap, the Edge Confidence Penalty (score x 0.6 within 32 pixels of an internal slice edge), IoF containment filtering (IoF > 0.85 and area ratio < 0.5), and slice-based NMS.
 
 ## Loss weights
 
