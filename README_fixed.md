@@ -4,7 +4,7 @@ Code for the paper **"BiSSR-Net: A bimodal oriented object detection framework f
 
 ## Overview
 
-BiSSR-Net detects filled and unfilled rice grains with oriented bounding boxes (OBBs) from paired reflective and transmissive images. The repository also contains MMSSR-Net, which handles paired, reflectiv-only, or transmissive-only inputs.
+BiSSR-Net detects filled and unfilled rice grains with oriented bounding boxes (OBBs) from paired reflective and transmissive images. The repository also contains MMSSR-Net, which handles paired, reflective-only, or transmissive-only inputs.
 
 - **ModalitySelector**: splits the six-channel input into two three-channel streams
 - **Dual-stream backbone**: two independently parameterized YOLOv12n backbones with A2C2f modules
