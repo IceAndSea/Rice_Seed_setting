@@ -1,113 +1,77 @@
 # BiSSR-Net
 
-**BiSSR-Net**: Bimodal-oriented object detection network for rice seed-setting rate estimation.
+Code for the paper **"BiSSR-Net: A bimodal oriented object detection framework for rice seed-setting rate estimation"**.
 
 ## Overview
 
-BiSSR-Net is a dual-stream fusion network that processes two complementary imaging modalities for oriented bounding box (OBB) object detection. The architecture integrates:
+BiSSR-Net detects filled and unfilled rice grains with oriented bounding boxes (OBBs) from paired reflective and transmissive images. The repository also contains MMSSR-Net, which handles paired, reflective-only, or transmissive-only inputs.
 
-- **ModalitySelector**: Splits 6-channel input into two 3-channel streams
-- **Dual-stream backbone**: Parameter-unshared YOLOv12n with A2C2f modules
-- **CMFT-DEPA**: Cross-Modal Feature Transport + Dual-Enhancement Positional Alignment fusion module
-- **OBB detection head**: Oriented bounding box prediction
+- **ModalitySelector**: splits the six-channel input into two three-channel streams
+- **Dual-stream backbone**: two independently parameterized YOLOv12n backbones with A2C2f modules
+- **CMFT-DEPA**: Cross-Modal Feature Transport (CMFT) followed by DEPA (dual spatial enhancing pixel weight assignment, adapted from DEYOLO)
+- **OBB detection head**: oriented bounding box prediction
 
-## Input Format
+## Input format
 
-The model accepts **6-channel images** with the following channel convention:
+The model accepts **six-channel images** with the following channel order:
 
-| Channels | Modality | Physical Meaning |
-|----------|----------|-----------------|
-| `[0:3]`  | Transmissive | Bottom illumination (下打光) |
-| `[3:6]`  | Reflective | Top illumination (上打光) |
+| Channels | Modality     | Illumination |
+|----------|--------------|--------------|
+| `[0:3]`  | Transmissive | Backlight    |
+| `[3:6]`  | Reflective   | Top light    |
 
-Image files should be organized as:
-- `images/` — reflective (top-illumination) images
-- `imagesT/` — transmissive (bottom-illumination) images (corresponding files with same names)
+Training images are organized as:
+
+- `images/`: reflective images
+- `imagesIR/`: transmissive images (same file names)
 
 ## Installation
 
-### Dependencies
-
 - Python >= 3.8
-- PyTorch >= 1.8
-- Ultralytics YOLOv11
+- PyTorch
 
-### Setup
+The repository includes the modified `ultralytics` package (YOLOv12 with the BiSSR-Net modules). Run all scripts from the repository root.
 
-1. Clone or install Ultralytics YOLOv11:
-   ```bash
-   pip install ultralytics
-   ```
+## Training
 
-2. Copy the project files into the Ultralytics source directory:
-   ```bash
-   # Copy data module
-   cp data/base_ori.py <ultralytics_path>/data/base_ori.py
+BiSSR-Net (Setting 7 in the paper). Set `MODEL_CFG` in `train_bissr.py` to `ultralytics/cfg/models/fuse/dea-seed-fuse.yaml`, then run:
 
-   # Copy fusion module
-   cp nn/modules/layers/DEA_ori.py <ultralytics_path>/nn/modules/layers/DEA_ori.py
-
-   # Copy model tasks
-   cp nn/tasks_ori.py <ultralytics_path>/nn/tasks_ori.py
-   ```
-
-3. Update `__init__.py` files to expose new modules:
-   - Add imports in `<ultralytics_path>/nn/modules/__init__.py` for `DEA`
-   - Add imports in `<ultralytics_path>/data/__init__.py` for `BaseDataset`
-
-## Usage
-
-### Training
-
-```python
-from ultralytics import YOLO
-
-model = YOLO("your_model.yaml")
-model.train(
-    data="your_dataset.yaml",
-    epochs=300,
-    imgsz=640,
-    batch=16,
-)
+```bash
+python train_bissr.py
 ```
 
-### Inference
+MMSSR-Net. Set `MODEL_CFG` as above and `SCHEDULE = "full_warmup_120"` in `train_mmssr.py` to use the four-stage schedule reported in the paper, then run:
 
-```python
-from ultralytics import YOLO
-
-model = YOLO("best.pt")
-results = model.predict(source="path/to/images", imgsz=640)
+```bash
+python train_mmssr.py
 ```
 
-## Architecture Details
+`train_bissr.py` uses the settings of the paper: 1024 x 1024 inputs, batch size 32, SGD, FP32 and up to 300 epochs (patience 40). In `train_mmssr.py`, `IMG_SZ = 640` and `BATCH = 16` are example defaults.
 
-### Fusion Module (DEA)
+## Full-image inference
 
-The DEA (Dual-Enhancement Alignment) block consists of:
+Reflective and transmissive images of a pair are stored in the same directory and named `<sample>-1.<ext>` (reflective) and `<sample>-2.<ext>` (transmissive).
 
-1. **CMFT-DECA**: Cross-Modal Feature Transport with cross-attention between modalities
-2. **DEPA**: Dual-Enhancement Positional Alignment with spatial attention
+```bash
+python val_bissr.py --weights path/to/best.pt --img_dir path/to/images --conf 0.2
+python val_mmssr.py --weights path/to/best.pt --img_dir path/to/images --mode dual   # or trans / reflect
+```
 
-### Hyperparameters
+Inference uses 1024 x 1024 slices with 300-pixel overlap, the Edge Confidence Penalty (score x 0.6 within 32 pixels of an internal slice edge), IoF containment filtering (IoF > 0.85 and area ratio < 0.5), and slice-based NMS.
 
-Loss weighting is controlled through the training hyperparameters:
-- `hyp.box`: Box loss weight (default: 7.5)
-- `hyp.cls`: Classification loss weight (default: 0.5)
-- `hyp.dfl`: DFL loss weight (default: 1.5)
+## Loss weights
+
+- `box`: 7.5
+- `cls`: 0.5
+- `dfl`: 1.5
+
+## Data
+
+The 50 test image pairs and their merged annotations are available on request from the corresponding authors.
 
 ## Citation
 
-If you use BiSSR-Net in your research, please cite:
-
-```bibtex
-@article{bissrnet2026,
-  title={BiSSR-Net: Bimodal-Oriented Object Detection Network for Rice Seed-Setting Rate Estimation},
-  author={Your Name et al.},
-  journal={TBD},
-  year={2026}
-}
-```
+J. Zhao, M. Li, J. Lou, Y. Pang, X. Huang, J. Yang, Y. Ma. BiSSR-Net: A bimodal oriented object detection framework for rice seed-setting rate estimation. Submitted to Pattern Recognition, 2026.
 
 ## License
 
