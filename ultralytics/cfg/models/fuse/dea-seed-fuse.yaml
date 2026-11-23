@@ -1,0 +1,179 @@
+# # Parameters
+# nc: 2 # number of classes
+# ch: 6 # Input channels (3 RGB + 3 IR)
+
+# # scales: # model compound scaling constants, i.e. 'model=yolov12n.yaml' will call yolov12.yaml with scale 'n'
+# #   # [depth, width, max_channels]
+# #   n: [0.50, 0.25, 1024] # summary: 497 layers, 2,553,904 parameters, 2,553,888 gradients, 6.2 GFLOPs
+# #   s: [0.50, 0.50, 1024] # summary: 497 layers, 9,127,424 parameters, 9,127,408 gradients, 19.7 GFLOPs
+# #   m: [0.50, 1.00, 512] # summary: 533 layers, 19,670,784 parameters, 19,670,768 gradients, 60.4 GFLOPs
+# #   l: [1.00, 1.00, 512] # summary: 895 layers, 26,506,496 parameters, 26,506,480 gradients, 83.3 GFLOPs
+# #   x: [1.00, 1.50, 512] # summary: 895 layers, 59,414,176 parameters, 59,414,160 gradients, 185.9 GFLOPs
+
+# depth_multiple: 1.00
+# width_multiple: 1.00
+# max_channels: 512
+
+
+# # ==========================================
+# # DEYOLO Backbone (Dual Stream: RGB + IR)
+# # ==========================================
+# backbone:
+#   # --- Input Split ---
+#   - [-1, 1, IdentityInput, []]          # 0
+#   - [-1, 1, ModalitySelector, [1]]      # 1
+#   - [-2, 1, ModalitySelector, [2]]      # 2
+
+#   # --- RGB Stream ---
+#   - [1, 1, Conv,  [64, 3, 2]]               # 3-P1/2
+#   - [-1, 1, Conv,  [128, 3, 2, 1, 2]]       # 4-P2/4
+#   - [-1, 2, C3k2,  [256, False, 0.25]]      # 5
+#   - [-1, 1, Conv,  [256, 3, 2, 1, 4]]       # 6-P3/8
+#   # 🔴 修改点1：将 512 改为 256，匹配标准 P3 输出
+#   - [-1, 2, C3k2,  [256, False, 0.25]]      # 7 (Output P3 for Fusion: 256ch)
+  
+#   - [-1, 1, Conv,  [512, 3, 2]]             # 8-P4/16
+#   - [-1, 4, A2C2f, [512, True, 4]]          # 9 (Output P4 for Fusion: 512ch)
+#   - [-1, 1, Conv,  [1024, 3, 2]]            # 10-P5/32
+#   - [-1, 4, A2C2f, [1024, True, 1]]         # 11 (Output P5 for Fusion: 1024ch)
+
+#   # --- IR Stream ---
+#   - [2, 1, Conv,  [64, 3, 2]]               # 12-P1/2
+#   - [-1, 1, Conv,  [128, 3, 2, 1, 2]]       # 13-P2/4
+#   - [-1, 2, C3k2,  [256, False, 0.25]]      # 14
+#   - [-1, 1, Conv,  [256, 3, 2, 1, 4]]       # 15-P3/8
+#   # 🔴 修改点2：将 512 改为 256，匹配标准 P3 输出
+#   - [-1, 2, C3k2,  [256, False, 0.25]]      # 16 (Output P3: 256ch)
+  
+#   - [-1, 1, Conv,  [512, 3, 2]]             # 17-P4/16
+#   - [-1, 4, A2C2f, [512, True, 4]]          # 18 (Output P4: 512ch)
+#   - [-1, 1, Conv,  [1024, 3, 2]]            # 19-P5/32
+#   - [-1, 4, A2C2f, [1024, True, 1]]         # 20 (Output P5: 1024ch)
+
+# # ==========================================
+# # DEYOLO Head (Fusion & Detection)
+# # ==========================================
+# head:
+#   # --- Fusion Modules (DEA) ---
+#   # RGB indices: P3=7,  P4=9,  P5=11
+#   # IR  indices: P3=16, P4=18, P5=20
+  
+#   - [[7, 16], 1, DEA, [256, 80]]        # 21: Fuse P3 (In: 256+256 -> Out: 256)
+#   - [[9, 18], 1, DEA, [512, 40]]        # 22: Fuse P4 (In: 512+512 -> Out: 512)
+#   - [[11, 20], 1, DEA, [1024, 20]]      # 23: Fuse P5 (In: 1024+1024 -> Out: 1024)
+
+#   # --- Neck ---
+#   - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 24
+#   - [[-1, 22], 1, Concat, [1]]                 # 25: cat Fused P4
+#   - [-1, 2, A2C2f, [512, False, -1]]           # 26: Neck P4
+
+#   - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 27
+#   - [[-1, 21], 1, Concat, [1]]                 # 28: cat Fused P3
+#   # 此时 Concat 输入: Upsample P4 (512->缩放后128) + DEA P3 (256->缩放后64) = 192
+#   # 下一层初始化将期望 192，且实际输入也是 192。完美匹配。
+#   - [-1, 2, A2C2f, [256, False, -1]]           # 29: Neck P3
+
+#   # Down-sample Path
+#   - [-1, 1, Conv, [256, 3, 2]]                 # 30
+#   - [[-1, 26], 1, Concat, [1]]                 # 31: cat Neck P4
+#   - [-1, 2, A2C2f, [512, False, -1]]           # 32
+
+#   - [-1, 1, Conv, [512, 3, 2]]                 # 33
+#   - [[-1, 23], 1, Concat, [1]]                 # 34: cat Fused P5
+#   - [-1, 2, C3k2, [1024, True]]                # 35
+
+#   # --- OBB Detect ---
+#   - [[29, 32, 35], 1, OBB, [nc, 1]]            # 36
+
+# DEYOLO - YOLOv12-based (improved)
+# Dual-stream (RGB + IR) OBB detector
+# Usage: save as .yaml and load with your training pipeline (e.g., ultralytics YOLO)
+
+# Parameters 
+nc: 2  # number of classes
+ch: 6  # Input channels (3 RGB + 3 IR)
+
+
+scales: # model compound scaling constants, i.e. 'model=yolov12n.yaml' will call yolov12.yaml with scale 'n'
+  # [depth, width, max_channels]
+  n: [0.50, 0.25, 1024] # summary: 497 layers, 2,553,904 parameters, 2,553,888 gradients, 6.2 GFLOPs
+  s: [0.50, 0.50, 1024] # summary: 497 layers, 9,127,424 parameters, 9,127,408 gradients, 19.7 GFLOPs
+  m: [0.50, 1.00, 512] # summary: 533 layers, 19,670,784 parameters, 19,670,768 gradients, 60.4 GFLOPs
+  l: [1.00, 1.00, 512] # summary: 895 layers, 26,506,496 parameters, 26,506,480 gradients, 83.3 GFLOPs
+  x: [1.00, 1.50, 512] # summary: 895 layers, 59,414,176 parameters, 59,414,160 gradients, 185.9 GFLOPs
+# ==========================================
+# DEYOLO Backbone (Dual Stream: RGB + IR)
+# ==========================================
+backbone:
+  # --- Input Split ---
+  - [-1, 1, IdentityInput, []]          # 0
+  - [-1, 1, ModalitySelector, [1]]      # 1 RGB
+  - [-2, 1, ModalitySelector, [2]]      # 2 IR
+
+  # ========== RGB Stream ==========
+  - [1, 1, Conv,  [64, 3, 2]]                    # 3-P1/2
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]]            # 4-P2/4
+  - [-1, 2, C3k2,  [256, False, 0.25]]           # 5
+  
+  - [-1, 1, Conv,  [256, 3, 2, 1, 4]]            # 6-P3/8
+  # 🔴 修复1: P3 输出改为 512 通道 (匹配 YOLOv12 标准)
+  - [-1, 2, C3k2,  [512, False, 0.25]]           # 7 (P3: 512ch)
+  
+  - [-1, 1, Conv,  [512, 3, 2]]                  # 8-P4/16
+  - [-1, 4, A2C2f, [512, True, 4]]               # 9 (P4: 512ch)
+  
+  - [-1, 1, Conv,  [1024, 3, 2]]                 # 10-P5/32
+  - [-1, 4, A2C2f, [1024, True, 1]]              # 11 (P5: 1024ch)
+  # 🔴 修复2: 添加 SPPF
+  - [-1, 1, SPPF, [1024, 5]]                     # 12 (RGB-SPPF)
+
+  # ========== IR Stream ==========
+  - [2, 1, Conv,  [64, 3, 2]]                    # 13-P1/2
+  - [-1, 1, Conv,  [128, 3, 2, 1, 2]]            # 14-P2/4
+  - [-1, 2, C3k2,  [256, False, 0.25]]           # 15
+  
+  - [-1, 1, Conv,  [256, 3, 2, 1, 4]]            # 16-P3/8
+  # 🔴 修复3: P3 输出改为 512 通道
+  - [-1, 2, C3k2,  [512, False, 0.25]]           # 17 (P3: 512ch)
+  
+  - [-1, 1, Conv,  [512, 3, 2]]                  # 18-P4/16
+  - [-1, 4, A2C2f, [512, True, 4]]               # 19 (P4: 512ch)
+  
+  - [-1, 1, Conv,  [1024, 3, 2]]                 # 20-P5/32
+  - [-1, 4, A2C2f, [1024, True, 1]]              # 21 (P5: 1024ch)
+  # 🔴 修复4: 添加 SPPF
+  - [-1, 1, SPPF, [1024, 5]]                     # 22 (IR-SPPF)
+
+# ==========================================
+# DEYOLO Head (Fusion & Detection)
+# ==========================================
+head:
+  # --- Fusion Modules (DEA) ---
+  # RGB: P3=7,  P4=9,  P5=12
+  # IR:  P3=17, P4=19, P5=22
+  
+  # 🔴 修复5: 更新 DEA 输入通道数
+  - [[7, 17], 1, DEA, [512, 80]]        # 23: Fuse P3 (512+512 -> 512)
+  - [[9, 19], 1, DEA, [512, 40]]        # 24: Fuse P4 (512+512 -> 512)
+  - [[12, 22], 1, DEA, [1024, 20]]      # 25: Fuse P5 (1024+1024 -> 1024)
+
+  # --- Neck (FPN + PAN) ---
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]   # 26
+  - [[-1, 24], 1, Concat, [1]]                   # 27: cat P4 (1024+512=1536)
+  - [-1, 2, A2C2f, [512, False, -1]]             # 28: Fused P4 (512ch)
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]   # 29
+  - [[-1, 23], 1, Concat, [1]]                   # 30: cat P3 (512+512=1024)
+  - [-1, 2, A2C2f, [256, False, -1]]             # 31: Fused P3 (256ch) ← Detect P3
+
+  # Down-sample Path
+  - [-1, 1, Conv, [256, 3, 2]]                   # 32
+  - [[-1, 28], 1, Concat, [1]]                   # 33: cat P4 (256+512=768)
+  - [-1, 2, A2C2f, [512, False, -1]]             # 34: Final P4 (512ch) ← Detect P4
+
+  - [-1, 1, Conv, [512, 3, 2]]                   # 35
+  - [[-1, 25], 1, Concat, [1]]                   # 36: cat P5 (512+1024=1536)
+  - [-1, 2, C3k2, [1024, True]]                  # 37: Final P5 (1024ch) ← Detect P5
+
+  # --- OBB Detection Head ---
+  - [[31, 34, 37], 1, OBB, [nc, 1]]              # 38: OBB(P3, P4, P5)
