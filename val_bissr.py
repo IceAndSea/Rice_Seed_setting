@@ -41,14 +41,17 @@ def main():
     parser.add_argument("--img_dir", required=True, help="Directory with reflective images")
     parser.add_argument("--output", default="runs/val_bissr", help="Output directory")
     parser.add_argument("--device", default="0", help="Device: 0, cpu, etc.")
-    parser.add_argument("--conf", type=float, default=0.2, help="Confidence threshold")
+    parser.add_argument("--conf", type=float, default=0.2, help="Confidence threshold for counting grains")
+    parser.add_argument("--slice-conf", type=float, default=None,
+                        help="Confidence threshold applied when collecting boxes from each slice "
+                             "(defaults to --conf). Boxes below --conf are kept for merging but not counted.")
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
 
     model = CustomUltralyticsModel(
         model_path=args.weights,
-        confidence_threshold=args.conf,
+        confidence_threshold=(args.slice_conf if args.slice_conf is not None else args.conf),
         device=args.device,
     )
 

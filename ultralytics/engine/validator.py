@@ -158,7 +158,7 @@ class BaseValidator:
                     m_ir = ch[:, :3].mean(dim=1, keepdim=True).view(-1, 1, 1, 1).to(self.device)
                     m_rgb = ch[:, 3:].mean(dim=1, keepdim=True).view(-1, 1, 1, 1).to(self.device)
                     for mod in model.modules():
-                        if mod.__class__.__name__ == "DEA":
+                        if callable(getattr(mod, "set_modality_flags", None)):
                             mod.set_modality_flags((m_ir, m_rgb))
 
             # Inference
@@ -168,7 +168,7 @@ class BaseValidator:
             # ===== 清理 =====
             if "channel_valid" in batch:
                 for mod in model.modules():
-                    if mod.__class__.__name__ == "DEA":
+                    if callable(getattr(mod, "set_modality_flags", None)):
                         mod.set_modality_flags(None)
 
             # Loss

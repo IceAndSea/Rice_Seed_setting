@@ -229,8 +229,24 @@ class BaseDataset(Dataset):
     def cache_images_to_disk(self, i):
         """Saves an image as an *.npy file for faster loading."""
         f = self.npy_files[i]
-        if not f.exists():
-            np.save(f.as_posix(), cv2.imread(self.im_files[i]), allow_pickle=False)
+        if f.exists():
+            # A dual-modality input must be cached as the merged 6-channel image.
+            # If a stale cache holds only the 3-channel reflective image, rebuild it
+            # by re-reading the paired originals.
+            try:
+                cached = np.load(f, allow_pickle=False)
+            except Exception:
+                cached = None
+            if cached is not None and not (self.is_dual and (cached.ndim < 3 or cached.shape[2] < 6)):
+                return
+        im = cv2.imread(self.im_files[i])  # BGR reflective
+        if self.is_dual:
+            t = self.im_files[i].replace("images", "imagesT")  # paired transmissive file
+            t_im = cv2.imread(t)
+            if t_im is None:
+                raise FileNotFoundError(f"Transmissive image not found: {t}")
+            im = cv2.merge((t_im, im))  # [0:3]=transmissive, [3:6]=reflective
+        np.save(f.as_posix(), im, allow_pickle=False)
 
     def check_cache_disk(self, safety_margin=0.5):
         """Check image caching requirements vs available disk space."""

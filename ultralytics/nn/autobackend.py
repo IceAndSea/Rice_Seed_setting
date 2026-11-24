@@ -529,6 +529,8 @@ class AutoBackend(nn.Module):
             for p in model.parameters():
                 p.requires_grad = False
 
+        if pt or nn_module:
+            self.channels = getattr(model, "yaml", {}).get("ch", 3)
         self.__dict__.update(locals())  # assign all variables to self
 
     def forward(self, im, augment=False, visualize=False, embed=None):

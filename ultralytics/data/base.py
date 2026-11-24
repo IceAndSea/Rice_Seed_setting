@@ -80,6 +80,12 @@ class BaseDataset(Dataset):
         self.pad = pad
         self.hyp = hyp  # hyperparameters
         self.is_dual = (hyp.ch or 3) > 3
+        # RG-PMMT schedule for MMSSR-Net; registered in ultralytics/cfg/default.yaml
+        # and passed through train args (pmmt_schedule=... in model.train).
+        _schedule = getattr(hyp, "pmmt_schedule", None)
+        if _schedule is None and isinstance(hyp, dict):
+            _schedule = hyp.get("pmmt_schedule", None)
+        self.pmmt_schedule = _schedule or "conservative"
         self._modality_logged = False
         self.current_epoch = 0
         self.total_epochs = 300
@@ -209,6 +215,8 @@ class BaseDataset(Dataset):
             return self.fixed_ratios  # (p_dual, p_t_only, p_r_only) fixed values
 
         schedule = getattr(self, "pmmt_schedule", "conservative")
+        if schedule == "paired":
+            return (1.00, 0.00, 0.00)  # paired: always dual
         stage = self._get_pmmt_stage()
         if schedule == "legacy":
             return ((1.00, 0.00, 0.00), (0.60, 0.20, 0.20), (0.80, 0.10, 0.10))[stage]
@@ -233,6 +241,8 @@ class BaseDataset(Dataset):
             return self.fixed_lambda_miss
 
         schedule = getattr(self, "pmmt_schedule", "conservative")
+        if schedule == "paired":
+            return 1.0  # paired: always dual, no loss scaling
         stage = self._get_pmmt_stage()
         if schedule == "legacy":
             return (0.0, 0.5, 1.0)[stage]
@@ -310,7 +320,8 @@ class BaseDataset(Dataset):
 
         Ablation: 如果设置了 gray_placeholder=True，使用灰度图占位而非均值填充。
         """
-        if not self.is_dual or not self.augment:
+        if not self.is_dual or not self.augment or getattr(self, "pmmt_schedule", None) == "paired":
+            # paired (BiSSR-style): both modalities are always present, no sampling.
             return img, "dual"
 
         p_dual, p_t_only, _ = self._get_stage_ratios()
@@ -358,8 +369,24 @@ class BaseDataset(Dataset):
     def cache_images_to_disk(self, i):
         """Saves an image as an *.npy file for faster loading."""
         f = self.npy_files[i]
-        if not f.exists():
-            np.save(f.as_posix(), cv2.imread(self.im_files[i]), allow_pickle=False)
+        if f.exists():
+            # A dual-modality input must be cached as the merged 6-channel image.
+            # If a stale cache holds only the 3-channel reflective image, rebuild it
+            # by re-reading the paired originals.
+            try:
+                cached = np.load(f, allow_pickle=False)
+            except Exception:
+                cached = None
+            if cached is not None and not (self.is_dual and (cached.ndim < 3 or cached.shape[2] < 6)):
+                return
+        im = cv2.imread(self.im_files[i])  # BGR reflective
+        if self.is_dual:
+            t = self.im_files[i].replace("images", "imagesT")  # paired transmissive file
+            t_im = cv2.imread(t)
+            if t_im is None:
+                raise FileNotFoundError(f"Transmissive image not found: {t}")
+            im = cv2.merge((t_im, im))  # [0:3]=transmissive, [3:6]=reflective
+        np.save(f.as_posix(), im, allow_pickle=False)
 
     def check_cache_disk(self, safety_margin=0.5):
         """Check image caching requirements vs available disk space."""

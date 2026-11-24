@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
 from ultralytics.nn.modules.conv import Conv
+
+_DEBUG_PROJ = os.environ.get("DEA_DEBUG_PROJ", "") == "1"  # set to print which projection path is selected
 
 class DEA(nn.Module):
     """DEA fusion block with optional gating and adaptive single-modality routing."""
@@ -54,13 +57,28 @@ class DEA(nn.Module):
             self.proj_t_norm = nn.BatchNorm2d(channel)
 
     def forward(self, x):
+        # Input order (see Fig. 3 / Section S16): x[0] comes from selector 1, which
+        # receives the TRANSMISSIVE image (legacy parameter name: F_r / proj_r /
+        # alpha_r); x[1] comes from selector 2, which receives the REFLECTIVE image
+        # (legacy name: F_t / proj_t / alpha_t). The legacy names are kept so old
+        # checkpoints load unchanged.
+        # modality_flags = (t_valid, r_valid): 1 = the transmissive / reflective
+        # image is available, 0 = missing. In dual mode (1, 1) the fused branch is
+        # used; transmissive-only (1, 0) routes the FIRST path (proj_r), and
+        # reflective-only (0, 1) routes the SECOND path (proj_t).
         F_r, F_t = x
         B = F_r.shape[0]
 
         if self.modality_flags is not None:
             m_t, m_r = self.modality_flags
-            m_t  = m_t.to(F_t.device).view(B, 1, 1, 1).float()
-            m_r = m_r.to(F_r.device).view(B, 1, 1, 1).float()
+            if torch.is_tensor(m_t):
+                m_t = m_t.to(F_t.device).view(B, 1, 1, 1).float()
+            else:
+                m_t = torch.full((B, 1, 1, 1), float(m_t), device=F_t.device)
+            if torch.is_tensor(m_r):
+                m_r = m_r.to(F_r.device).view(B, 1, 1, 1).float()
+            else:
+                m_r = torch.full((B, 1, 1, 1), float(m_r), device=F_r.device)
         else:
             m_t  = torch.ones(B, 1, 1, 1, device=F_t.device)
             m_r = torch.ones(B, 1, 1, 1, device=F_r.device)
@@ -69,8 +87,11 @@ class DEA(nn.Module):
 
         if is_dual.all():
             if self.ENABLE_GATE:
-                F_r_gated = m_r * self.alpha_r(F_r).contiguous() * F_r
-                F_t_gated  = m_t  * self.alpha_t(F_t).contiguous()   * F_t
+                # Legacy names kept for old weights: F_r receives the TRANSMISSIVE
+                # feature and is gated by the transmissive flag m_t; F_t receives
+                # the REFLECTIVE feature and is gated by the reflective flag m_r.
+                F_r_gated = m_t * self.alpha_r(F_r).contiguous() * F_r
+                F_t_gated = m_r * self.alpha_t(F_t).contiguous() * F_t
                 result_r, result_t = self.depa(self.deca([F_r_gated, F_t_gated]))
             else:
                 result_r, result_t = self.depa(self.deca([F_r, F_t]))
@@ -83,24 +104,38 @@ class DEA(nn.Module):
             if is_dual.all():
                 F_out = F_bi
             elif not is_dual.any():
-                F_out = m_t * (1 - m_r) * F_t_out + (1 - m_t) * m_r * F_r_out
+                # Single-modality routing: transmissive-only samples take the first
+                # path (proj_r, fed by x[0]); reflective-only samples take the second
+                # path (proj_t, fed by x[1]).
+                F_out = m_t * (1 - m_r) * F_r_out + (1 - m_t) * m_r * F_t_out
             else:
                 _r, _t = self.depa(self.deca([
-                    m_r * self.alpha_r(F_r).contiguous() * F_r if self.ENABLE_GATE else F_r,
-                    m_t  * self.alpha_t(F_t).contiguous()   * F_t  if self.ENABLE_GATE else F_t,
+                    m_t * self.alpha_r(F_r).contiguous() * F_r if self.ENABLE_GATE else F_r,
+                    m_r * self.alpha_t(F_t).contiguous() * F_t if self.ENABLE_GATE else F_t,
                 ]))
                 F_bi = self.act(_r + _t)
                 F_out = (m_t * m_r * F_bi
-                         + m_t  * (1 - m_r) * F_t_out
-                         + (1 - m_t) * m_r  * F_r_out)
+                         + m_t  * (1 - m_r) * F_r_out
+                         + (1 - m_t) * m_r  * F_t_out)
         else:
             if not is_dual.all():
                 _r, _t = self.depa(self.deca([
-                    m_r * self.alpha_r(F_r).contiguous() * F_r if self.ENABLE_GATE else F_r,
-                    m_t  * self.alpha_t(F_t).contiguous()   * F_t  if self.ENABLE_GATE else F_t,
+                    m_t * self.alpha_r(F_r).contiguous() * F_r if self.ENABLE_GATE else F_r,
+                    m_r * self.alpha_t(F_t).contiguous() * F_t if self.ENABLE_GATE else F_t,
                 ]))
                 F_bi = self.act(_r + _t)
             F_out = F_bi
+
+        if _DEBUG_PROJ:
+            n_t = int((m_t > 0.5).sum().item())
+            n_r = int((m_r > 0.5).sum().item())
+            if n_t and n_r:
+                sel = "fused branch (deca+depa)"
+            elif n_t:
+                sel = "proj_r (first path, x[0]=transmissive)"
+            else:
+                sel = "proj_t (second path, x[1]=reflective)"
+            print(f"[DEA debug] B={B} t_valid={n_t} r_valid={n_r} -> selected: {sel}")
 
         return F_out
 
@@ -237,7 +272,7 @@ class DECA(CMFT_DECA):
     pass
 
 class DEPA(nn.Module):
-    """x0 --> reflective,  x1 --> transmissive"""
+    """x[0] = transmissive, x[1] = reflective"""
 
     def __init__(self, channel=512, m_kernel=None):
         super().__init__()

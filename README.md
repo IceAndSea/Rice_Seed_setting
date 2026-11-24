@@ -23,7 +23,7 @@ The model accepts **six-channel images** with the following channel order:
 Training images are organized as:
 
 - `images/`: reflective images
-- `imagesIR/`: transmissive images (same file names)
+- `imagesT/`: transmissive images (same file names)
 
 ## Installation
 
@@ -34,19 +34,23 @@ The repository includes the modified `ultralytics` package (YOLOv12 with the BiS
 
 ## Training
 
-BiSSR-Net (Setting 7 in the paper). Set `MODEL_CFG` in `train_bissr.py` to `ultralytics/cfg/models/fuse/dea-seed-fuse.yaml`, then run:
+Set `path` in `ultralytics/cfg/datasets/obb-seed.yaml` to the dataset root (class 0 = unfilled, class 1 = filled). `train_bissr.py` initializes the model from the pretrained `yolo12n.pt` weights.
+
+BiSSR-Net (Setting 7 in the paper). `train_bissr.py` uses the model configuration `ultralytics/cfg/models/fuse/DEYOLOseed12.yaml` (`dea-seed-fuse.yaml` in the same folder defines the same layers):
 
 ```bash
 python train_bissr.py
 ```
 
-MMSSR-Net. Set `MODEL_CFG` as above and `SCHEDULE = "full_warmup_120"` in `train_mmssr.py` to use the four-stage schedule reported in the paper, then run:
+MMSSR-Net. `train_mmssr.py` uses the same model configuration and `SCHEDULE = "full_warmup_120"`, the four-stage schedule reported in the paper (Supplementary Table S1: epochs 1-120 paired only, 121-180 90/5/5, 181-255 80/10/10, 256-300 95/2.5/2.5 for paired/reflective-only/transmissive-only inputs):
 
 ```bash
 python train_mmssr.py
 ```
 
-`train_bissr.py` uses the settings of the paper: 1024 x 1024 inputs, batch size 32, SGD, FP32 and up to 300 epochs (patience 40). In `train_mmssr.py`, `IMG_SZ = 640` and `BATCH = 16` are example defaults.
+Both scripts use the settings of the paper: 1024 x 1024 inputs, batch size 32, seed 0, SGD (initial learning rate 0.01, final factor 0.01, momentum 0.937, weight decay 0.0005, 3 warm-up epochs), FP32 and up to 300 epochs (patience 40), with mosaic enabled throughout training.
+
+During MMSSR-Net training, each source image independently receives an input mode (paired, reflective-only, or transmissive-only) before mosaic augmentation. A mosaic can therefore contain tiles with different input modes. The first source image supplies the mosaic's modality flag for branch selection and for counting single-modality samples when scaling the batch loss.
 
 ## Full-image inference
 
@@ -57,7 +61,7 @@ python val_bissr.py --weights path/to/best.pt --img_dir path/to/images --conf 0.
 python val_mmssr.py --weights path/to/best.pt --img_dir path/to/images --mode dual   # or trans / reflect
 ```
 
-Inference uses 1024 x 1024 slices with 300-pixel overlap, the Edge Confidence Penalty (score x 0.6 within 32 pixels of an internal slice edge), IoF containment filtering (IoF > 0.85 and area ratio < 0.5), and slice-based NMS.
+Inference uses 1024 x 1024 slices with 300-pixel overlap. After full-image coordinates are restored, the Edge Confidence Penalty is applied (score x 0.6 within 32 pixels of an internal slice edge), followed by cross-class IoF containment filtering (IoF > 0.85 and area ratio < 0.60) and class-agnostic global rotated NMS (IoU 0.5). Boxes with confidence >= 0.20 (`--conf`) are counted for the seed-setting rate. `--slice-conf` optionally sets a lower confidence floor for collecting slice predictions before merging.
 
 ## Loss weights
 

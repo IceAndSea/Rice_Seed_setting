@@ -322,14 +322,14 @@ class BaseModel(nn.Module):
             m_t  = cv[:, 0].float()
             m_r = cv[:, 3].float()
             for m in self.model.modules():
-                if isinstance(m, DEA):
+                if isinstance(m, DEA) and hasattr(m, "set_modality_flags"):
                     m.set_modality_flags((m_t, m_r))
 
         preds = self.forward(img) if preds is None else preds
 
         # 清空模态标志，避免影响验证/推理
         for m in self.model.modules():
-            if isinstance(m, DEA):
+            if isinstance(m, DEA) and hasattr(m, "set_modality_flags"):
                 m.set_modality_flags(None)
 
         return self.criterion(preds, batch)

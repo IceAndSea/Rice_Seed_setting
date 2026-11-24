@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from ultralytics.nn.modules.conv import Conv
 
 class DEA(nn.Module):
-    """x0 --> reflective, x1 --> transmissive"""
+    """x[0] = transmissive, x[1] = reflective"""
 
     def __init__(
         self, channel=512, kernel_size=80, p_kernel=None, m_kernel=None, reduction=16
@@ -162,7 +162,7 @@ class DECA(CMFT_DECA):
     pass
 
 class DEPA(nn.Module):
-    """x0 --> reflective,  x1 --> transmissive - 稳定版本"""
+    """x[0] = transmissive, x[1] = reflective - 稳定版本"""
 
     def __init__(self, channel=512, m_kernel=None):
         super().__init__()

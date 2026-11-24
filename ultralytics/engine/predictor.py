@@ -168,8 +168,12 @@ class BasePredictor:
         not_tensor = not isinstance(im, torch.Tensor)
         if not_tensor:
             im = np.stack(self.pre_transform(im))
-            if im.shape[-1] in {3, 6}:
-                im = im[..., ::-1]  # Match Format._format_img(): BGR->RGB and keep 6-channel order aligned with train/val.
+            if im.shape[-1] == 6:
+                # 6-channel: convert BGR->RGB within each modality block, keep the
+                # block order ([0:3]=transmissive, [3:6]=reflective) aligned with training.
+                im = im[..., [2, 1, 0, 5, 4, 3]]
+            elif im.shape[-1] == 3:
+                im = im[..., ::-1]  # BGR->RGB
             im = im.transpose((0, 3, 1, 2))  # BHWC to BCHW, (n, c, h, w)
             im = np.ascontiguousarray(im)  # contiguous
             im = torch.from_numpy(im)

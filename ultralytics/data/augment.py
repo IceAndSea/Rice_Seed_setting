@@ -2127,7 +2127,14 @@ class Format:
         if len(img.shape) < 3:
             img = np.expand_dims(img, -1)
         img = img.transpose(2, 0, 1)
-        img = np.ascontiguousarray(img[::-1] if random.uniform(0, 1) > self.bgr else img)
+        if img.shape[0] == 6:
+            # 6-channel bimodal input: channels [0:3]=transmissive, [3:6]=reflective (BGR).
+            # Swap B<->R within each 3-channel block only (BGR->RGB); block order stays
+            # transmissive first, reflective second. A whole-tensor img[::-1] would also
+            # swap the two modalities, which corrupts the input.
+            img = np.ascontiguousarray(img[[2, 1, 0, 5, 4, 3]] if random.uniform(0, 1) > self.bgr else img)
+        else:
+            img = np.ascontiguousarray(img[::-1] if random.uniform(0, 1) > self.bgr else img)
         img = torch.from_numpy(img)
         return img
 
@@ -2762,7 +2769,12 @@ class ToTensor:
             >>> print(tensor_img.shape, tensor_img.dtype)
             torch.Size([3, 640, 640]) torch.float16
         """
-        im = np.ascontiguousarray(im.transpose((2, 0, 1))[::-1])  # HWC to CHW -> BGR to RGB -> contiguous
+        if im.shape[2] == 6:
+            # 6-channel bimodal input: BGR->RGB within each block, block order kept
+            # ([0:3]=transmissive, [3:6]=reflective). img[::-1] would reverse all 6 channels.
+            im = np.ascontiguousarray(im.transpose((2, 0, 1))[[2, 1, 0, 5, 4, 3]])
+        else:
+            im = np.ascontiguousarray(im.transpose((2, 0, 1))[::-1])  # HWC to CHW -> BGR to RGB -> contiguous
         im = torch.from_numpy(im)  # to torch
         im = im.half() if self.half else im.float()  # uint8 to fp16/32
         im /= 255.0  # 0-255 to 0.0-1.0

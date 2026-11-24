@@ -23,6 +23,13 @@ from sahi_infer.sahi_infer import (
     _save_predictions_for_map,
     collect_rgb_images,
 )
+from ultralytics.nn.modules.layers.DEA import DEA
+
+# Availability flags passed to the DEA fusion modules, as (t_valid, r_valid):
+# 1 = the transmissive / reflective image is available, 0 = missing.
+# dual -> (1, 1) fused branch; trans -> (1, 0) first path (proj_r, x[0] =
+# transmissive); reflect -> (0, 1) second path (proj_t, x[1] = reflective).
+MODE_FLAGS = {"dual": (1, 1), "trans": (1, 0), "reflect": (0, 1)}
 
 SLICE_HW      = 1024
 OVERLAP       = 300
@@ -68,7 +75,10 @@ def main():
     parser.add_argument("--img_dir", required=True, help="Directory with reflective images")
     parser.add_argument("--output", default="runs/val_mmssr", help="Output directory")
     parser.add_argument("--device", default="0", help="Device: 0, cpu, etc.")
-    parser.add_argument("--conf", type=float, default=0.2, help="Confidence threshold")
+    parser.add_argument("--conf", type=float, default=0.2, help="Confidence threshold for counting grains")
+    parser.add_argument("--slice-conf", type=float, default=None,
+                        help="Confidence threshold applied when collecting boxes from each slice "
+                             "(defaults to --conf). Boxes below --conf are kept for merging but not counted.")
     parser.add_argument("--mode", default="dual", choices=["dual", "trans", "reflect"],
                         help="Test mode: dual (both), trans (transmissive-only), reflect (reflective-only)")
     args = parser.parse_args()
@@ -78,9 +88,20 @@ def main():
 
     model = CustomUltralyticsModel(
         model_path=args.weights,
-        confidence_threshold=args.conf,
+        confidence_threshold=(args.slice_conf if args.slice_conf is not None else args.conf),
         device=args.device,
     )
+
+    # Pass the availability flags to every DEA fusion module so missing
+    # modalities are routed to the correct single-modality branch.
+    flags = MODE_FLAGS[args.mode]
+    n_dea = 0
+    for m in model.model.model.modules():
+        if isinstance(m, DEA):
+            m.set_modality_flags(flags)
+            n_dea += 1
+    print(f"Modality availability flags set on {n_dea} DEA modules: "
+          f"transmissive={flags[0]}, reflective={flags[1]}")
 
     postprocess = AdvancedPostprocessPredictions(
         match_threshold=0.5,

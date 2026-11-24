@@ -17,7 +17,10 @@ from sahi.postprocess.combine import PostprocessPredictions
 from sahi.prediction import PredictionResult
 from sahi.predict import filter_predictions
 
-from custom_combine import AdvancedPostprocessPredictions
+if __package__:
+    from .custom_combine import AdvancedPostprocessPredictions
+else:
+    from custom_combine import AdvancedPostprocessPredictions
 
 DEBUG = False
 SLICE_HEIGHT = 1024
@@ -383,7 +386,7 @@ def _patched_get_sliced_prediction(
         )
         object_prediction_list.extend(_normalize_object_prediction_list(prediction_result.object_prediction_list))
 
-    if len(object_prediction_list) > 1:
+    if object_prediction_list:  # even a single box must pass the edge check (ECP)
         postprocess_time_start = time.time()
         object_prediction_list = _apply_postprocess(
             postprocess,
@@ -471,7 +474,9 @@ def main():
             print("Skip: failed to read RGB or IR image.")
             continue
 
-        img_6ch = np.concatenate((img_rgb, img_ir), axis=-1)
+        # Channel order must match training (base.py): first path = transmissive
+        # (img_ir, "-2" files), second path = reflective (img_rgb, "-1" files).
+        img_6ch = np.concatenate((img_ir, img_rgb), axis=-1)
         result = get_sliced_prediction(
             img_6ch,
             detection_model=detection_model,
@@ -506,144 +511,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# - main/sahi_infer.py:342 开始主流程：加载模型、初始化后处理器、遍历 RGB/IR 图像对
-#   - main/sahi_infer.py:381 把 RGB + IR 拼成 6 通道图
-#   - main/sahi_infer.py:184 的自定义 get_sliced_prediction() 对 6 通道图做切片推理
-#   - 每个切片内部会走 main/sahi_infer.py:93 的自定义 get_prediction()
-#   - 模型真正推理在 main/sahi_infer.py:29 的 CustomUltralyticsModel.perform_inference()
-#   - 所有切片结果汇总后，交给 AdvancedPostprocessPredictions 做去重/融合
-#   - 最后把结果画到 RGB 图上，并通过 result.export_visuals() 导出可视化图，见 main/sahi_infer.py:398
-#
-#   SAHI 原生框架部分
-#
-#   - 你仍然在用 SAHI 的这些核心对象：
-#       - UltralyticsDetectionModel 基类，见 main/sahi_infer.py:15
-#       - PredictionResult，见 main/sahi_infer.py:17
-#       - filter_predictions，见 main/sahi_infer.py:18
-#       - get_slice_bboxes，见 main/sahi_infer.py:19
-#       - PostprocessPredictions 基类，见 main/sahi_infer.py:16
-#   - 也就是说，SAHI 原生框架还负责：
-#       - 检测模型抽象层接口
-#       - 原始预测转 ObjectPrediction
-#       - 切片框网格计算
-#       - 预测结果对象封装
-#       - 导出可视化 export_visuals()
-#
-#   你的自定义处理逻辑
-#
-#   - 1. 6 通道输入模型适配
-#       - main/sahi_infer.py:29
-#       - 你继承了 UltralyticsDetectionModel，重写了 perform_inference()
-#       - 你的处理包括：
-#           - 接收 (H, W, 6) 的 numpy 图像
-#           - 前 3 通道和后 3 通道分别做 BGR->RGB
-#           - 转成 [1, 6, H, W] tensor
-#           - 除以 255.0
-#           - 补齐到 32 倍数后再推理
-#           - 把 Ultralytics 输出整理成 SAHI 能接的格式
-#   - 2. 重写 SAHI 的单图预测入口
-#       - main/sahi_infer.py:93
-#       - 你 monkey patch 了 sahi.predict.get_prediction
-#       - 作用：
-#           - 避开 SAHI 原生 read_image_as_pil() 对 6 通道图的限制
-#           - 直接让 numpy 6 通道图进入模型
-#           - 保留 SAHI 的 convert_original_predictions() 和 filter_predictions()
-#   - 3. 重写 SAHI 的切片推理入口
-#       - main/sahi_infer.py:184
-#       - 你 monkey patch 了 sahi.predict.get_sliced_prediction
-#       - 作用：
-#           - 支持 6 通道切片图
-#           - 支持传入你自己的 postprocess_class
-#           - 在每个预测上补 slice_origin
-#           - 把切片坐标、整图尺寸、切片尺寸传给你的高级后处理器
-#   - 4. 自定义 PredictionResult 图像兼容
-#       - main/sahi_infer.py:29 上面的 _to_prediction_result_image()
-#       - 因为 SAHI 的 PredictionResult 内部还是会把 image 转 PIL，所以你把 6 通道图裁成前 3 通道再交给它
-#       - 这一步只影响“结果对象保存的可视化底图”，不影响模型推理
-#   - 5. 自定义后处理结果格式规整
-#       - _normalize_object_prediction_list() 和 _apply_postprocess()
-#       - 这是为了兼容 ObjectPredictionList 与普通 list，避免 export_visuals() 出错
-#   - 6. 你的高级后处理
-#       - 来自 main/custom_combine.py
-#       - AdvancedPostprocessPredictions 是你自己的核心后处理逻辑
-#       - 它不是 SAHI 原生
-#
-#   当前实际执行顺序
-#
-#   - main/sahi_infer.py:343
-#       - 初始化 CustomUltralyticsModel
-#   - main/sahi_infer.py:350
-#       - 初始化 AdvancedPostprocessPredictions
-#   - main/sahi_infer.py:367
-#       - 遍历每张 -1 结尾的 RGB 图
-#   - main/sahi_infer.py:369
-#       - 用 rgb_to_ir_path() 找对应 -2 的 IR 图
-#   - main/sahi_infer.py:381
-#       - 拼成 6 通道 img_6ch
-#   - main/sahi_infer.py:382
-#       - 调用你重写后的 get_sliced_prediction()
-#   - main/sahi_infer.py:221
-#       - 内部用 SAHI 原生 get_slice_bboxes() 生成切片网格
-#   - main/sahi_infer.py:254
-#       - 逐片裁切图像
-#   - main/sahi_infer.py:256
-#       - 每片调用你重写后的 get_prediction()
-#   - main/sahi_infer.py:110
-#       - 实际进入 CustomUltralyticsModel.perform_inference()
-#   - main/sahi_infer.py:267
-#       - 给每个结果补上 slice_origin
-#   - main/sahi_infer.py:295
-#       - 用你的 AdvancedPostprocessPredictions 合并所有切片结果
-#   - main/sahi_infer.py:396
-#       - 用 RGB 图做可视化底图
-#   - main/sahi_infer.py:398
-#       - 调用 SAHI 原生 export_visuals() 导出结果图
-#
-#   你保留的 SAHI 原生能力
-#
-#   - 切片网格生成：get_slice_bboxes
-#   - 预测结果对象封装：PredictionResult
-#   - 原始检测结果转换：convert_original_predictions
-#   - 类别过滤：filter_predictions
-#   - 导出可视化：export_visuals
-#
-#   你替换掉的 SAHI 原生能力
-#
-#   - 原生 get_prediction
-#   - 原生 get_sliced_prediction
-#   - 原生 Ultralytics 推理输入处理
-#   - 原生后处理策略的核心调用方式
-#
-#   你的关键参数值
-#
-#   - 模型部分，见 main/sahi_infer.py:343
-#       - model_path = C:\Users\mingzhu.li\PyCharmMiscProject\main\runs\train_new\DEYOLO_v12_o_deca_val\weights\best.pt
-#       - confidence_threshold = 0.2
-#       - device = "cpu"
-#   - 切片部分，见 main/sahi_infer.py:24 和 main/sahi_infer.py:382
-#       - SLICE_HEIGHT = 1024
-#       - SLICE_WIDTH = 1024
-#       - OVERLAP_RATIO = 300 / 1024 ≈ 0.293
-#       - perform_standard_pred = False
-#   - 后处理部分，见 main/sahi_infer.py:350
-#       - match_threshold = 0.5
-#       - use_advanced_combiner = True
-#       - edge_penalty_ratio = 0.6
-#       - edge_margin = 32
-#       - iof_threshold = 0.6
-#       - size_ratio_threshold = 0.6
-#       - verbose = DEBUG
-#   - 输入输出部分
-#       - 输入目录：main/sahi_infer.py:360 -> main\image_test
-#       - 输出目录：main/sahi_infer.py:361 -> sahi_DEYOLO_v12_o_test_clean
-#
-#   你的高级后处理器里在做什么
-#
-#   - 在 main/custom_combine.py
-#   - 主要是这几类逻辑：
-#       - 边缘框惩罚 edge_penalty_ratio
-#       - IoF 包含关系过滤 iof_threshold
-#       - 尺寸比例判定 size_ratio_threshold
-#       - 最终 NMS / IOU 合并 match_threshold
-#   - 这部分本质上是在替代 SAHI 默认的简单切片结果合并，让它更贴合你原来改过源码的逻辑
